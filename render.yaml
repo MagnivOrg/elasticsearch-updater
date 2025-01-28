@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: elasticsearch-updater
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python update_elasticsearch.py
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ELASTICSEARCH_URL
+        sync: false
