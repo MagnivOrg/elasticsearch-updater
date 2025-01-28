@@ -1,20 +1,23 @@
-import psycopg2
+import resource
+resource.setrlimit(resource.RLIMIT_AS, (500 * 1024 * 1024, 512 * 1024 * 1024))
+
 from elasticsearch import Elasticsearch, helpers
 
 DB_CONFIG = {
-    "dbname": "prompt_layer_db",
+    "dbname": "prompt_layer_db_ytp2",
     "user": "prompt_layer_db_user",
     "password": "NHqotkLZAGWIRB1rQW9QOh6ntmO5lMXH",
-    "host": "dpg-cemr30pgp3jlcsi397s0-b",
+    "host": "dpg-cucc871u0jms73867410-a",
     "port": "5432",
 }
 
 ES_HOST = "https://your-elasticsearch-url.onrender.com"
 INDEX_NAME = "request_logs_index"
-CHUNK_SIZE = 1000000
-
+CHUNK_SIZE = 10000
 
 def fetch_data_chunk(offset, limit):
+    import psycopg2
+
     conn = psycopg2.connect(**DB_CONFIG)
     cursor = conn.cursor()
 
