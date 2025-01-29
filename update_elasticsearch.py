@@ -1,24 +1,13 @@
 import psycopg2
-import resource
-resource.setrlimit(resource.RLIMIT_AS, (500 * 1024 * 1024, 512 * 1024 * 1024))
-
 from elasticsearch import Elasticsearch, helpers
 
-DB_CONFIG = {
-    "dbname": "prompt_layer_db_ytp2",
-    "user": "prompt_layer_db_user",
-    "password": "NHqotkLZAGWIRB1rQW9QOh6ntmO5lMXH",
-    "host": "dpg-cucc871u0jms73867410-a",
-    "port": "5432",
-}
+from settings import DB_CONFIG, ELASTICSEARCH_URL, CHUNK_SIZE, INDEX_NAME
 
-ES_HOST = "https://api-pr-2894-l1wo.onrender.com"
-INDEX_NAME = "request_logs_index"
-CHUNK_SIZE = 1000000
 
 def fetch_data_chunk(offset, limit):
+    """Fetch a chunk of data from PostgreSQL using a cursor."""
     conn = psycopg2.connect(**DB_CONFIG)
-    cursor = conn.cursor()
+    cursor = conn.cursor(name="data_cursor")
 
     query = f"""
         SELECT
@@ -40,42 +29,42 @@ def fetch_data_chunk(offset, limit):
         OFFSET {offset} LIMIT {limit};
     """
     cursor.execute(query)
-    rows = cursor.fetchall()
+
+    while True:
+        rows = cursor.fetchmany(size=CHUNK_SIZE)
+        if not rows:
+            break
+
+        yield [
+            {
+                "_id": row[0],
+                "_index": INDEX_NAME,
+                "_source": {
+                    "id": row[0],
+                    "workspace_id": row[1],
+                    "request_start_time": row[2],
+                    "request_end_time": row[3],
+                    "price": row[4],
+                    "tokens": row[5],
+                    "engine": row[6],
+                    "tags": row[7] if row[7] else [],
+                    "metadata": row[8] if row[8] else {},
+                },
+            }
+            for row in rows
+        ]
+
     cursor.close()
     conn.close()
 
-    return [
-        {
-            "_id": row[0],
-            "_index": INDEX_NAME,
-            "_source": {
-                "id": row[0],
-                "workspace_id": row[1],
-                "request_start_time": row[2],
-                "request_end_time": row[3],
-                "price": row[4],
-                "tokens": row[5],
-                "engine": row[6],
-                "tags": row[7] if row[7] is not None else [],
-                "metadata": row[8] if row[8] is not None else {},
-            },
-        }
-        for row in rows
-    ]
-
 
 def update_elasticsearch():
-    es = Elasticsearch([ES_HOST])
-    offset = 0
+    """Update Elasticsearch with the latest data in chunks."""
+    es = Elasticsearch([ELASTICSEARCH_URL])
 
-    while True:
-        data_chunk = fetch_data_chunk(offset, CHUNK_SIZE)
-        if not data_chunk:
-            break
-
+    for data_chunk in fetch_data_chunk(0, CHUNK_SIZE):  # Stream data
         helpers.bulk(es, data_chunk)
         print(f"Pushed {len(data_chunk)} records to Elasticsearch.")
-        offset += CHUNK_SIZE
 
     print("Data sync to Elasticsearch completed.")
 
