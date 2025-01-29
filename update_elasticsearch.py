@@ -12,7 +12,7 @@ DB_CONFIG = {
     "port": "5432",
 }
 
-ES_HOST = "https://your-elasticsearch-url.onrender.com"
+ES_HOST = "https://api-pr-2894-l1wo.onrender.com"
 INDEX_NAME = "request_logs_index"
 CHUNK_SIZE = 1000000
 
