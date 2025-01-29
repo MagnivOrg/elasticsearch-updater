@@ -6,4 +6,4 @@ COPY . .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-CMD ["sh", "-c", "echo 'Container started but no script running'"]
+CMD ["python", "update_elasticsearch.py"]

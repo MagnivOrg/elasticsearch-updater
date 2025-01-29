@@ -1,3 +1,4 @@
+import psycopg2
 import resource
 resource.setrlimit(resource.RLIMIT_AS, (500 * 1024 * 1024, 512 * 1024 * 1024))
 
@@ -13,11 +14,9 @@ DB_CONFIG = {
 
 ES_HOST = "https://your-elasticsearch-url.onrender.com"
 INDEX_NAME = "request_logs_index"
-CHUNK_SIZE = 10000
+CHUNK_SIZE = 1000000
 
 def fetch_data_chunk(offset, limit):
-    import psycopg2
-
     conn = psycopg2.connect(**DB_CONFIG)
     cursor = conn.cursor()
 
