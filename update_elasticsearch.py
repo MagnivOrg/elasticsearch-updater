@@ -1,8 +1,6 @@
 import psycopg2
 from elasticsearch import Elasticsearch, helpers
-
 from settings import DB_CONFIG, ELASTICSEARCH_URL, CHUNK_SIZE, INDEX_NAME
-
 
 def fetch_data_chunk(offset, limit):
     """Fetch a chunk of data from PostgreSQL using a cursor."""
@@ -37,10 +35,10 @@ def fetch_data_chunk(offset, limit):
 
         yield [
             {
-                "_id": row[0],
+                "_op_type": "update",
                 "_index": INDEX_NAME,
-                "_source": {
-                    "id": row[0],
+                "_id": row[0],  # Use id from PostgreSQL as document ID
+                "doc": {
                     "workspace_id": row[1],
                     "request_start_time": row[2],
                     "request_end_time": row[3],
@@ -50,13 +48,13 @@ def fetch_data_chunk(offset, limit):
                     "tags": row[7] if row[7] else [],
                     "metadata": row[8] if row[8] else {},
                 },
+                "doc_as_upsert": True  # If not exists, create it
             }
             for row in rows
         ]
 
     cursor.close()
     conn.close()
-
 
 def update_elasticsearch():
     """Update Elasticsearch with the latest data in chunks."""
@@ -67,7 +65,6 @@ def update_elasticsearch():
         print(f"Pushed {len(data_chunk)} records to Elasticsearch.")
 
     print("Data sync to Elasticsearch completed.")
-
 
 if __name__ == "__main__":
     update_elasticsearch()
