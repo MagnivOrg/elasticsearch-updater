@@ -5,21 +5,30 @@ import psycopg2.pool
 
 from settings import DB_CONFIG, CHUNK_SIZE
 
+DB_CONN_STRING = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}?sslmode=require&keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=5"
+
 connection_pool = psycopg2.pool.SimpleConnectionPool(
     minconn=5,
     maxconn=20,
-    dsn=f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}?sslmode=require"
+    dsn=DB_CONN_STRING
 )
 
+import time
 
-def get_connection():
-    """Get a connection from the pool"""
-    return connection_pool.getconn()
-
+def get_connection(retry_attempts=3, delay=5):
+    for attempt in range(retry_attempts):
+        try:
+            return connection_pool.getconn()
+        except psycopg2.OperationalError as e:
+            print(f"Database connection failed (Attempt {attempt+1}): {e}")
+            time.sleep(delay)
+    raise Exception("Database connection failed after multiple attempts")
 
 def release_connection(conn):
-    """Release the connection back to the pool"""
-    connection_pool.putconn(conn)
+    try:
+        connection_pool.putconn(conn)
+    except Exception as e:
+        print(f"Failed to release connection: {e}")
 
 
 def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
