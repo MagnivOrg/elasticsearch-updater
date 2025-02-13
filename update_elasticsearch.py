@@ -1,21 +1,20 @@
 import json
 from datetime import datetime
-
 import psycopg2
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
 from settings import DB_CONFIG, CHUNK_SIZE
-from models import AnalyticsData
 
-# Initialize SQLAlchemy session
 DATABASE_URL = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
 engine = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)
 
+READ_REPLICA_URL = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['read_host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
+
 def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
-    """Fetch data in an optimized way without full table scans."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    cursor = conn.cursor(name="data_cursor")
+    """Fetch data from the read replica with locking to avoid conflicts."""
+    read_conn = psycopg2.connect(READ_REPLICA_URL)
+    read_cursor = read_conn.cursor(name="data_cursor")
 
     query = f"""
        WITH request_data AS (
@@ -53,11 +52,10 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
         GROUP BY mv.request_id
     ) AS metadata ON r.request_log_id = metadata.request_id;
     """
-
-    cursor.execute(query)
+    read_cursor.execute(query)
 
     while True:
-        rows = cursor.fetchmany(size=CHUNK_SIZE)
+        rows = read_cursor.fetchmany(size=CHUNK_SIZE)
         if not rows:
             break
 
@@ -79,28 +77,41 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
             for row in rows
         ]
 
-    cursor.close()
-    conn.close()
+    read_cursor.close()
+    read_conn.close()
 
 
 def update_analytics_data():
-    conn = psycopg2.connect(**DB_CONFIG)
-    cursor = conn.cursor()
+    """Handle async data processing with batch commits and locking."""
+    valid_keys = ["dbname", "user", "password", "host", "port"]
+    write_db_config = {key: DB_CONFIG[key] for key in valid_keys if key in DB_CONFIG}
+
+    write_conn = psycopg2.connect(**write_db_config)
+    write_cursor = write_conn.cursor()
 
     last_id = 0
     while True:
-        data_chunk = list(fetch_data_chunk(last_id, CHUNK_SIZE))
+        data_chunk = [item for batch in fetch_data_chunk(last_id, CHUNK_SIZE) for item in batch]
         if not data_chunk:
             break
 
-        for row in data_chunk:
-            (
-                request_log_id, workspace_id, prompt_id, prompt_name,
-                request_start_time, request_end_time, price, tokens,
-                engine, tags, analytics_metadata, synced
-            ) = row
+        for item in data_chunk:
+            request_log_id = item["request_log_id"]
+            workspace_id = item["workspace_id"]
+            prompt_id = item["prompt_id"]
+            prompt_name = item["prompt_name"]
+            request_start_time = item["request_start_time"]
+            request_end_time = item["request_end_time"]
+            price = item["price"]
+            tokens = item["tokens"]
+            engine = item["engine"]
+            tags = item["tags"]
+            analytics_metadata = item["analytics_metadata"]
+            synced = item["synced"]
 
-            cursor.execute(
+            print(f"Processing Request Log ID: {request_log_id}")
+
+            write_cursor.execute(
                 """
                 INSERT INTO analytics_data (
                     request_log_id, workspace_id, prompt_id, prompt_name, 
@@ -122,19 +133,29 @@ def update_analytics_data():
                     synced = EXCLUDED.synced
                 """,
                 (
-                    request_log_id, workspace_id, prompt_id, prompt_name,
-                    request_start_time, request_end_time, price, tokens,
-                    engine, json.dumps(tags), json.dumps(analytics_metadata), False
+                    request_log_id,
+                    workspace_id,
+                    prompt_id,
+                    prompt_name,
+                    request_start_time,
+                    request_end_time,
+                    price,
+                    tokens,
+                    engine,
+                    json.dumps(tags),
+                    json.dumps(analytics_metadata),
+                    synced
                 )
             )
 
             last_id = request_log_id
 
-        conn.commit()
+        write_conn.commit()
         print(f"Processed {len(data_chunk)} records into analytics_data.")
 
-    cursor.close()
-    conn.close()
+    write_cursor.close()
+    write_conn.close()
+
 
 if __name__ == "__main__":
     update_analytics_data()
