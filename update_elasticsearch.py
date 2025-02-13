@@ -1,19 +1,30 @@
 import json
 from datetime import datetime
-import psycopg2
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import create_engine
+
+import psycopg2.pool
+
 from settings import DB_CONFIG, CHUNK_SIZE
 
-DATABASE_URL = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
-engine = create_engine(DATABASE_URL)
-Session = sessionmaker(bind=engine)
+connection_pool = psycopg2.pool.SimpleConnectionPool(
+    minconn=5,
+    maxconn=20,
+    dsn=f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}?sslmode=require"
+)
 
-READ_REPLICA_URL = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['read_host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
+
+def get_connection():
+    """Get a connection from the pool"""
+    return connection_pool.getconn()
+
+
+def release_connection(conn):
+    """Release the connection back to the pool"""
+    connection_pool.putconn(conn)
+
 
 def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
-    """Fetch data from the read replica with locking to avoid conflicts."""
-    read_conn = psycopg2.connect(READ_REPLICA_URL)
+    """Fetch data from the read replica using the connection pool."""
+    read_conn = get_connection()
     read_cursor = read_conn.cursor(name="data_cursor")
 
     query = f"""
@@ -52,8 +63,8 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
         GROUP BY mv.request_id
     ) AS metadata ON r.request_log_id = metadata.request_id;
     """
-    read_cursor.execute(query)
 
+    read_cursor.execute(query)
     while True:
         rows = read_cursor.fetchmany(size=CHUNK_SIZE)
         if not rows:
@@ -78,83 +89,75 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
         ]
 
     read_cursor.close()
-    read_conn.close()
+    release_connection(read_conn)
 
 
 def update_analytics_data():
-    """Handle async data processing with batch commits and locking."""
-    valid_keys = ["dbname", "user", "password", "host", "port"]
-    write_db_config = {key: DB_CONFIG[key] for key in valid_keys if key in DB_CONFIG}
-
-    write_conn = psycopg2.connect(**write_db_config)
+    """Use connection pool to prevent frequent disconnects"""
+    write_conn = get_connection()
     write_cursor = write_conn.cursor()
 
-    last_id = 0
-    while True:
-        data_chunk = [item for batch in fetch_data_chunk(last_id, CHUNK_SIZE) for item in batch]
-        if not data_chunk:
-            break
+    try:
+        last_id = 0
+        while True:
+            data_chunk = [item for batch in fetch_data_chunk(last_id, CHUNK_SIZE) for item in batch]
+            if not data_chunk:
+                break
 
-        for item in data_chunk:
-            request_log_id = item["request_log_id"]
-            workspace_id = item["workspace_id"]
-            prompt_id = item["prompt_id"]
-            prompt_name = item["prompt_name"]
-            request_start_time = item["request_start_time"]
-            request_end_time = item["request_end_time"]
-            price = item["price"]
-            tokens = item["tokens"]
-            engine = item["engine"]
-            tags = item["tags"]
-            analytics_metadata = item["analytics_metadata"]
-            synced = item["synced"]
+            for data in data_chunk:
+                request_log_id = data["request_log_id"]
+                workspace_id = data["workspace_id"]
+                prompt_id = data["prompt_id"]
+                prompt_name = data["prompt_name"]
+                request_start_time = data["request_start_time"]
+                request_end_time = data["request_end_time"]
+                price = data["price"]
+                tokens = data["tokens"]
+                engine = data["engine"]
+                tags = json.dumps(data["tags"])
+                analytics_metadata = json.dumps(data["analytics_metadata"])
+                synced = False
 
-            print(f"Processing Request Log ID: {request_log_id}")
-
-            write_cursor.execute(
-                """
-                INSERT INTO analytics_data (
-                    request_log_id, workspace_id, prompt_id, prompt_name, 
-                    request_start_time, request_end_time, price, tokens, 
-                    engine, tags, analytics_metadata, synced
-                ) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
-                ON CONFLICT (request_log_id) DO UPDATE SET
-                    workspace_id = EXCLUDED.workspace_id,
-                    prompt_id = EXCLUDED.prompt_id,
-                    prompt_name = EXCLUDED.prompt_name,
-                    request_start_time = EXCLUDED.request_start_time,
-                    request_end_time = EXCLUDED.request_end_time,
-                    price = EXCLUDED.price,
-                    tokens = EXCLUDED.tokens,
-                    engine = EXCLUDED.engine,
-                    tags = EXCLUDED.tags,
-                    analytics_metadata = EXCLUDED.analytics_metadata,
-                    synced = EXCLUDED.synced
-                """,
-                (
-                    request_log_id,
-                    workspace_id,
-                    prompt_id,
-                    prompt_name,
-                    request_start_time,
-                    request_end_time,
-                    price,
-                    tokens,
-                    engine,
-                    json.dumps(tags),
-                    json.dumps(analytics_metadata),
-                    synced
+                write_cursor.execute(
+                    """
+                    INSERT INTO analytics_data (
+                        request_log_id, workspace_id, prompt_id, prompt_name, 
+                        request_start_time, request_end_time, price, tokens, 
+                        engine, tags, analytics_metadata, synced
+                    ) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                    ON CONFLICT (request_log_id) DO UPDATE SET
+                        workspace_id = EXCLUDED.workspace_id,
+                        prompt_id = EXCLUDED.prompt_id,
+                        prompt_name = EXCLUDED.prompt_name,
+                        request_start_time = EXCLUDED.request_start_time,
+                        request_end_time = EXCLUDED.request_end_time,
+                        price = EXCLUDED.price,
+                        tokens = EXCLUDED.tokens,
+                        engine = EXCLUDED.engine,
+                        tags = EXCLUDED.tags,
+                        analytics_metadata = EXCLUDED.analytics_metadata,
+                        synced = EXCLUDED.synced
+                    """,
+                    (
+                        request_log_id, workspace_id, prompt_id, prompt_name,
+                        request_start_time, request_end_time, price, tokens,
+                        engine, tags, analytics_metadata, synced
+                    )
                 )
-            )
 
-            last_id = request_log_id
+                last_id = request_log_id
 
-        write_conn.commit()
-        print(f"Processed {len(data_chunk)} records into analytics_data.")
+            write_conn.commit()
+            print(f"Processed {len(data_chunk)} records into analytics_data.")
 
-    write_cursor.close()
-    write_conn.close()
+    except Exception as e:
+        write_conn.rollback()
+        print(f"Error: {e}")
+
+    finally:
+        write_cursor.close()
+        release_connection(write_conn)
 
 
 if __name__ == "__main__":

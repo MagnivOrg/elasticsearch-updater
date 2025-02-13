@@ -11,4 +11,4 @@ DB_CONFIG = {
     "read_host": os.getenv("READ_POSTGRES_HOST")
 }
 ES_HOST = os.getenv("ELASTICSEARCH_URL")
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 50000))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 5000))
