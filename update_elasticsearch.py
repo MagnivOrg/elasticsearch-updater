@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 import psycopg2
@@ -83,37 +84,51 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
 
 
 def update_analytics_data():
-    """Efficiently update analytics_data table with historical data."""
-    session = Session()
-    try:
-        last_id = 0  # Track last processed ID
-        while True:
-            data_chunk = list(fetch_data_chunk(last_id, CHUNK_SIZE))
-            if not data_chunk:
-                break
+    conn = psycopg2.connect(**DB_CONFIG)
+    cursor = conn.cursor()
 
-            for data in data_chunk:
-                existing_entry = session.query(AnalyticsData).filter_by(request_log_id=data["request_log_id"]).first()
+    last_id = 0  # Track last processed ID
+    while True:
+        data_chunk = list(fetch_data_chunk(last_id, CHUNK_SIZE))
+        if not data_chunk:
+            break
 
-                if existing_entry:
-                    # Update existing analytics data
-                    for key, value in data.items():
-                        setattr(existing_entry, key, value)
-                else:
-                    # Insert new analytics entry
-                    analytics_entry = AnalyticsData(**data)
-                    session.add(analytics_entry)
+        for data in data_chunk:
+            cursor.execute(
+                """
+                INSERT INTO analytics_data (
+                    request_log_id, workspace_id, prompt_id, prompt_name, 
+                    request_start_time, request_end_time, price, tokens, 
+                    engine, tags, analytics_metadata, synced
+                ) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                ON CONFLICT (request_log_id) DO UPDATE SET
+                    workspace_id = EXCLUDED.workspace_id,
+                    prompt_id = EXCLUDED.prompt_id,
+                    prompt_name = EXCLUDED.prompt_name,
+                    request_start_time = EXCLUDED.request_start_time,
+                    request_end_time = EXCLUDED.request_end_time,
+                    price = EXCLUDED.price,
+                    tokens = EXCLUDED.tokens,
+                    engine = EXCLUDED.engine,
+                    tags = EXCLUDED.tags,
+                    analytics_metadata = EXCLUDED.analytics_metadata,
+                    synced = EXCLUDED.synced
+                """,
+                (
+                    data["request_log_id"], data["workspace_id"], data["prompt_id"], data["prompt_name"],
+                    data["request_start_time"], data["request_end_time"], data["price"], data["tokens"],
+                    data["engine"], json.dumps(data["tags"]), json.dumps(data["analytics_metadata"]), False
+                )
+            )
 
-                last_id = data["request_log_id"]  # Update last processed ID
+            last_id = data["request_log_id"]
 
-            session.commit()
-            print(f"Processed {len(data_chunk)} records into analytics_data.")
+        conn.commit()
+        print(f"Processed {len(data_chunk)} records into analytics_data.")
 
-    except Exception as e:
-        session.rollback()
-        print(f"Error processing data: {e}")
-    finally:
-        session.close()
+    cursor.close()
+    conn.close()
 
 
 if __name__ == "__main__":
