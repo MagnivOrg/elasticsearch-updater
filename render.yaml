@@ -1,6 +1,6 @@
 services:
-  - type: web
-    name: elasticsearch-updater
+  - type: worker
+    name: analytics-updater
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python update_elasticsearch.py"
