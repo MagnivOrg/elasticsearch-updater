@@ -1,6 +1,4 @@
 import psycopg2
-from psycopg2.pool import SimpleConnectionPool
-import time
 from settings import DB_CONFIG, CHUNK_SIZE
 
 DB_CONN_STRING = (
@@ -9,41 +7,13 @@ DB_CONN_STRING = (
     f"port={DB_CONFIG['port']} sslmode=require"
 )
 
-# Ensure we do not exceed Render's DB connection limits
-MAX_CONNECTIONS = 5
-
-# Establish a connection pool with error handling
-try:
-    connection_pool = SimpleConnectionPool(
-        minconn=1, maxconn=MAX_CONNECTIONS, dsn=DB_CONN_STRING
-    )
-except psycopg2.OperationalError as e:
-    print(f"⚠️ Failed to create connection pool: {e}")
-    exit(1)
-
-
-def get_connection(retries=3, delay=5):
-    """Retrieve a connection with automatic retries on failure."""
-    for attempt in range(retries):
-        try:
-            conn = connection_pool.getconn()
-            if conn.closed:
-                raise psycopg2.OperationalError("Connection was closed")
-            return conn
-        except psycopg2.OperationalError as e:
-            print(f"Database connection failed (Attempt {attempt+1}): {e}")
-            time.sleep(delay)
-    raise Exception("Database connection failed after multiple attempts")
-
+def get_connection():
+    """Establish a new PostgreSQL connection."""
+    return psycopg2.connect(DB_CONN_STRING)
 
 def release_connection(conn):
-    """Safely return connection to the pool or close it if invalid."""
-    if conn:
-        if conn.closed:
-            print("Skipping release: Connection was already closed.")
-        else:
-            connection_pool.putconn(conn)
-
+    """Close the PostgreSQL connection."""
+    conn.close()
 
 def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
     """Fetch data efficiently without causing connection issues."""
