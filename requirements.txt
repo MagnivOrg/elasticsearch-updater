@@ -1,4 +1,4 @@
 psycopg2
 elasticsearch
 python-dotenv
-python-dotenv
+sqlalchemy
