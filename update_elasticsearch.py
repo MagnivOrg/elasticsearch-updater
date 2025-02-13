@@ -1,49 +1,162 @@
+from datetime import datetime
+
 import psycopg2
+import json
 from settings import DB_CONFIG, CHUNK_SIZE
 
-DB_CONN_STRING = (
-    f"dbname={DB_CONFIG['dbname']} user={DB_CONFIG['user']} "
-    f"password={DB_CONFIG['password']} host={DB_CONFIG['host']} "
-    f"port={DB_CONFIG['port']} sslmode=require"
-)
 
 def get_connection():
-    """Establish a new PostgreSQL connection."""
-    return psycopg2.connect(DB_CONN_STRING)
+    """Establish a direct connection to PostgreSQL."""
+    return psycopg2.connect(
+        dbname=DB_CONFIG["dbname"],
+        user=DB_CONFIG["user"],
+        password=DB_CONFIG["password"],
+        host=DB_CONFIG["host"],
+        port=DB_CONFIG["port"],
+        sslmode="require"
+    )
 
-def release_connection(conn):
-    """Close the PostgreSQL connection."""
-    conn.close()
 
 def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
-    """Fetch data efficiently without causing connection issues."""
+    """Fetch relevant data from request_logs, metadata, and tags for analytics processing."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        WITH request_data AS (
+            SELECT 
+                rl.id AS request_log_id,
+                rl.workspace_id,
+                rl.prompt_id,
+                p.prompt_name,
+                rl.request_start_time,
+                rl.request_end_time,
+                rl.price,
+                rl.tokens,
+                rl.engine
+            FROM request_logs AS rl
+            LEFT JOIN prompt_registry p ON rl.prompt_id = p.id
+            WHERE rl.id > %s
+            ORDER BY rl.id ASC
+            LIMIT %s
+        )
+        SELECT
+            r.*,
+            COALESCE(tags.tag_names, ARRAY[]::TEXT[]) AS tags,
+            COALESCE(metadata.meta_data, '{}'::jsonb) AS analytics_metadata
+        FROM request_data r
+        LEFT JOIN (
+            SELECT rt.request_id, ARRAY_AGG(DISTINCT t.name) AS tag_names
+            FROM requests_tags rt
+            JOIN tags t ON rt.tag_id = t.id
+            GROUP BY rt.request_id
+        ) AS tags ON r.request_log_id = tags.request_id
+        LEFT JOIN (
+            SELECT mv.request_id, JSONB_OBJECT_AGG(mf.name, mv.value) AS meta_data
+            FROM metadata_value mv
+            JOIN metadata_field mf ON mv.metadata_field_id = mf.id
+            GROUP BY mv.request_id
+        ) AS metadata ON r.request_log_id = metadata.request_id;
+    """
+
+    cursor.execute(query, (last_id, limit))
+
+    while True:
+        rows = cursor.fetchmany(size=CHUNK_SIZE)
+        if not rows:
+            break
+
+        yield [
+            {
+                "request_log_id": row[0],
+                "workspace_id": row[1],
+                "prompt_id": row[2],
+                "prompt_name": row[3],
+                "request_start_time": row[4].isoformat() if isinstance(row[4], datetime) else row[4],
+                "request_end_time": row[5].isoformat() if isinstance(row[5], datetime) else row[5],
+                "price": row[6],
+                "tokens": row[7],
+                "engine": row[8],
+                "tags": row[9] if row[9] else [],
+                "analytics_metadata": row[10] if row[10] else {},
+                "synced": False,
+            }
+            for row in rows
+        ]
+
+    cursor.close()
+    conn.close()
+
+
+def update_analytics_data():
+    """Insert fetched data into analytics_data with proper deduplication."""
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        query = f"""
-            SELECT id, workspace_id, request_start_time, request_end_time, 
-                   price, tokens, engine, tags, analytics_metadata, synced
-            FROM analytics_data
-            WHERE id > {last_id}
-            ORDER BY id ASC
-            LIMIT {limit}
-        """
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        return rows
-    except psycopg2.OperationalError as e:
-        print(f"Error fetching data: {e}")
-        return []
+        last_id = 0
+        while True:
+            data_chunk = [item for batch in fetch_data_chunk(last_id, CHUNK_SIZE) for item in batch]
+            if not data_chunk:
+                break
+
+            for data in data_chunk:
+                request_log_id = data["request_log_id"]
+                workspace_id = data["workspace_id"]
+                prompt_id = data["prompt_id"]
+                prompt_name = data["prompt_name"]
+                request_start_time = data["request_start_time"]
+                request_end_time = data["request_end_time"]
+                price = data["price"]
+                tokens = data["tokens"]
+                engine = data["engine"]
+                tags = json.dumps(data["tags"])
+                analytics_metadata = json.dumps(data["analytics_metadata"])
+                synced = False
+
+                cursor.execute(
+                    """
+                    INSERT INTO analytics_data (
+                        request_log_id, workspace_id, prompt_id, prompt_name, 
+                        request_start_time, request_end_time, price, tokens, 
+                        engine, tags, analytics_metadata, synced
+                    ) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                    ON CONFLICT (request_log_id) DO UPDATE SET
+                        workspace_id = EXCLUDED.workspace_id,
+                        prompt_id = EXCLUDED.prompt_id,
+                        prompt_name = EXCLUDED.prompt_name,
+                        request_start_time = EXCLUDED.request_start_time,
+                        request_end_time = EXCLUDED.request_end_time,
+                        price = EXCLUDED.price,
+                        tokens = EXCLUDED.tokens,
+                        engine = EXCLUDED.engine,
+                        tags = EXCLUDED.tags,
+                        analytics_metadata = EXCLUDED.analytics_metadata,
+                        synced = EXCLUDED.synced
+                    """,
+                    (
+                        request_log_id, workspace_id, prompt_id, prompt_name,
+                        request_start_time, request_end_time, price, tokens,
+                        engine, tags, analytics_metadata, synced
+                    )
+                )
+
+                last_id = request_log_id
+
+            conn.commit()
+            print(f"Processed {len(data_chunk)} records into analytics_data.")
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Error: {e}")
+
     finally:
         cursor.close()
-        release_connection(conn)
+        conn.close()
 
 
 if __name__ == "__main__":
-    print("Starting database sync...")
-    try:
-        records = fetch_data_chunk()
-        print(f"Fetched {len(records)} records.")
-    except Exception as e:
-        print(f"Sync failed: {e}")
+    print("Starting data sync to analytics_data...")
+    update_analytics_data()
+    print("Sync completed.")

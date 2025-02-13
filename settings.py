@@ -10,5 +10,6 @@ DB_CONFIG = {
     "port": os.getenv("POSTGRES_PORT", 5432),
     "read_host": os.getenv("READ_POSTGRES_HOST")
 }
-ES_HOST = os.getenv("ELASTICSEARCH_URL")
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 500))
+ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL")
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 50))
+INDEX_NAME="analytics_index"
