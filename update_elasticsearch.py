@@ -22,22 +22,22 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
             rl.id AS request_log_id,
             rl.workspace_id,
             rl.prompt_id,
-            p.name AS prompt_name,  -- ✅ Fetch from the related table
+            p.prompt_name,
             rl.request_start_time,
             rl.request_end_time,
             rl.price,
             rl.tokens,
             rl.engine
         FROM request_logs AS rl
-        LEFT JOIN prompt_registry p ON rl.prompt_id = p.id  -- ✅ Get prompt_name from related table
-        WHERE rl.id > {last_id}  -- No OFFSET to avoid slow performance
+        LEFT JOIN prompt_registry p ON rl.prompt_id = p.id
+        WHERE rl.id > {last_id}
         ORDER BY rl.id ASC
         LIMIT {limit}
     )
     SELECT
         r.*,
         COALESCE(tags.tag_names, ARRAY[]::TEXT[]) AS tags,
-        COALESCE(metadata.meta_data, CAST('{{}}' AS jsonb)) AS analytics_metadata
+        COALESCE(metadata.meta_data, '{}'::jsonb) AS analytics_metadata
     FROM request_data r
     LEFT JOIN (
         SELECT rt.request_id, ARRAY_AGG(DISTINCT t.name) AS tag_names
@@ -46,7 +46,7 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
         GROUP BY rt.request_id
     ) AS tags ON r.request_log_id = tags.request_id
     LEFT JOIN (
-        SELECT mv.request_id, JSONB_OBJECT_AGG(mf.name, mv.value)::jsonb AS meta_data
+        SELECT mv.request_id, JSONB_OBJECT_AGG(mf.name, mv.value) AS meta_data
         FROM metadata_value mv
         JOIN metadata_field mf ON mv.metadata_field_id = mf.id
         GROUP BY mv.request_id
