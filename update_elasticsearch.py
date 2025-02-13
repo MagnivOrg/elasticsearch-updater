@@ -87,13 +87,19 @@ def update_analytics_data():
     conn = psycopg2.connect(**DB_CONFIG)
     cursor = conn.cursor()
 
-    last_id = 0  # Track last processed ID
+    last_id = 0
     while True:
         data_chunk = list(fetch_data_chunk(last_id, CHUNK_SIZE))
         if not data_chunk:
             break
 
-        for data in data_chunk:
+        for row in data_chunk:
+            (
+                request_log_id, workspace_id, prompt_id, prompt_name,
+                request_start_time, request_end_time, price, tokens,
+                engine, tags, analytics_metadata, synced
+            ) = row
+
             cursor.execute(
                 """
                 INSERT INTO analytics_data (
@@ -116,20 +122,19 @@ def update_analytics_data():
                     synced = EXCLUDED.synced
                 """,
                 (
-                    data["request_log_id"], data["workspace_id"], data["prompt_id"], data["prompt_name"],
-                    data["request_start_time"], data["request_end_time"], data["price"], data["tokens"],
-                    data["engine"], json.dumps(data["tags"]), json.dumps(data["analytics_metadata"]), False
+                    request_log_id, workspace_id, prompt_id, prompt_name,
+                    request_start_time, request_end_time, price, tokens,
+                    engine, json.dumps(tags), json.dumps(analytics_metadata), False
                 )
             )
 
-            last_id = data["request_log_id"]
+            last_id = request_log_id
 
         conn.commit()
         print(f"Processed {len(data_chunk)} records into analytics_data.")
 
     cursor.close()
     conn.close()
-
 
 if __name__ == "__main__":
     update_analytics_data()
