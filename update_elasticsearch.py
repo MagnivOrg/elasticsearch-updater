@@ -37,7 +37,7 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
     SELECT
         r.*,
         COALESCE(tags.tag_names, ARRAY[]::TEXT[]) AS tags,
-        COALESCE(metadata.meta_data, '{}'::jsonb) AS analytics_metadata
+        COALESCE(metadata.meta_data, '{{}}'::jsonb) AS analytics_metadata
     FROM request_data r
     LEFT JOIN (
         SELECT rt.request_id, ARRAY_AGG(DISTINCT t.name) AS tag_names
