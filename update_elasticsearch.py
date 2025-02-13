@@ -22,13 +22,14 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
             rl.id AS request_log_id,
             rl.workspace_id,
             rl.prompt_id,
-            rl.prompt_name,
+            p.name AS prompt_name,  -- ✅ Fetch from the related table
             rl.request_start_time,
             rl.request_end_time,
             rl.price,
             rl.tokens,
             rl.engine
         FROM request_logs AS rl
+        LEFT JOIN prompt_registry p ON rl.prompt_id = p.id  -- ✅ Get prompt_name from related table
         WHERE rl.id > {last_id}  -- No OFFSET to avoid slow performance
         ORDER BY rl.id ASC
         LIMIT {limit}
