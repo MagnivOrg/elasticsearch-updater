@@ -19,10 +19,17 @@ def get_connection():
 
 def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
     """Fetch relevant data from request_logs, metadata, and tags for analytics processing."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    conn = psycopg2.connect(
+        dbname=DB_CONFIG["dbname"],
+        user=DB_CONFIG["user"],
+        password=DB_CONFIG["password"],
+        host=DB_CONFIG["host"],
+        port=DB_CONFIG["port"],
+        sslmode="require"
+                            )
+    cursor = conn.cursor(name="data_cursor")
 
-    query = """
+    query = f"""
         WITH request_data AS (
             SELECT 
                 rl.id AS request_log_id,
@@ -36,14 +43,14 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
                 rl.engine
             FROM request_logs AS rl
             LEFT JOIN prompt_registry p ON rl.prompt_id = p.id
-            WHERE rl.id > %s
+            WHERE rl.id > {last_id}
             ORDER BY rl.id ASC
-            LIMIT %s
+            LIMIT {limit}
         )
         SELECT
             r.*,
             COALESCE(tags.tag_names, ARRAY[]::TEXT[]) AS tags,
-            COALESCE(metadata.meta_data, '{}'::jsonb) AS analytics_metadata
+            COALESCE(metadata.meta_data, '{{}}'::jsonb) AS analytics_metadata
         FROM request_data r
         LEFT JOIN (
             SELECT rt.request_id, ARRAY_AGG(DISTINCT t.name) AS tag_names
@@ -59,7 +66,7 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
         ) AS metadata ON r.request_log_id = metadata.request_id;
     """
 
-    cursor.execute(query, (last_id, limit))
+    cursor.execute(query)
 
     while True:
         rows = cursor.fetchmany(size=CHUNK_SIZE)
