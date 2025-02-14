@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 
 import psycopg2
@@ -17,16 +18,22 @@ def get_connection():
     )
 
 
+def get_last_synced_id():
+    """Get the last synced request_log_id from analytics_data."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT MAX(request_log_id) FROM analytics_data")
+    last_id = cursor.fetchone()[0] or 0
+
+    cursor.close()
+    conn.close()
+    return last_id
+
+
 def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
     """Fetch relevant data from request_logs, metadata, and tags for analytics processing."""
-    conn = psycopg2.connect(
-        dbname=DB_CONFIG["dbname"],
-        user=DB_CONFIG["user"],
-        password=DB_CONFIG["password"],
-        host=DB_CONFIG["host"],
-        port=DB_CONFIG["port"],
-        sslmode="require"
-                            )
+    conn = get_connection()
     cursor = conn.cursor(name="data_cursor")
 
     query = f"""
@@ -43,17 +50,17 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
                 rl.engine
             FROM request_logs AS rl
             LEFT JOIN prompt_registry p ON rl.prompt_id = p.id
-            WHERE rl.id > {last_id}
+            WHERE rl.id > {last_id}  -- Fetch only new records
             ORDER BY rl.id ASC
             LIMIT {limit}
         )
         SELECT
             r.*,
-            COALESCE(tags.tag_names, ARRAY[]::TEXT[]) AS tags,
+            COALESCE(tags.tag_names, '[]'::jsonb) AS tags,  -- Ensure JSONB format
             COALESCE(metadata.meta_data, '{{}}'::jsonb) AS analytics_metadata
         FROM request_data r
         LEFT JOIN (
-            SELECT rt.request_id, ARRAY_AGG(DISTINCT t.name) AS tag_names
+            SELECT rt.request_id, JSONB_AGG(DISTINCT t.name) AS tag_names
             FROM requests_tags rt
             JOIN tags t ON rt.tag_id = t.id
             GROUP BY rt.request_id
@@ -84,8 +91,8 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
                 "price": row[6],
                 "tokens": row[7],
                 "engine": row[8],
-                "tags": row[9] if row[9] else [],
-                "analytics_metadata": row[10] if row[10] else {},
+                "tags": row[9],
+                "analytics_metadata": row[10],
                 "synced": False,
             }
             for row in rows
@@ -96,12 +103,14 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
 
 
 def update_analytics_data():
-    """Insert fetched data into analytics_data with proper deduplication."""
+    """Insert fetched data into analytics_data with deduplication."""
     conn = get_connection()
     cursor = conn.cursor()
+    last_id = get_last_synced_id()
+
+    records_synced = 0
 
     try:
-        last_id = 0
         while True:
             data_chunk = [item for batch in fetch_data_chunk(last_id, CHUNK_SIZE) for item in batch]
             if not data_chunk:
@@ -150,6 +159,7 @@ def update_analytics_data():
                 )
 
                 last_id = request_log_id
+                records_synced += 1
 
             conn.commit()
             print(f"Processed {len(data_chunk)} records into analytics_data.")
@@ -162,8 +172,22 @@ def update_analytics_data():
         cursor.close()
         conn.close()
 
+    return records_synced
+
 
 if __name__ == "__main__":
     print("Starting data sync to analytics_data...")
-    update_analytics_data()
-    print("Sync completed.")
+
+    while True:
+        try:
+            records_synced = update_analytics_data()
+
+            if records_synced == 0:
+                print("No more records to sync. Exiting...")
+                break
+
+            print(f"Processed {records_synced} records. Checking for more...")
+        except Exception as e:
+            print(f"Error during sync: {e}")
+
+        time.sleep(5)
