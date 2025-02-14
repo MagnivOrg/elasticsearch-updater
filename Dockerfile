@@ -10,4 +10,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-CMD ["python", "update_elasticsearch.py"]
+CMD ["sh", "-c", "while true; do python update_elasticsearch.py; sleep 10; done"]
