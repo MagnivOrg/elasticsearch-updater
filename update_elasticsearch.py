@@ -183,11 +183,11 @@ if __name__ == "__main__":
             records_synced = update_analytics_data()
 
             if records_synced == 0:
-                print("No more records to sync. Exiting...")
-                break
+                print("No more records to sync. Retrying in 30 seconds...")
+                time.sleep(30)
+            else:
+                print(f"Processed {records_synced} records. Checking for more...")
 
-            print(f"Processed {records_synced} records. Checking for more...")
         except Exception as e:
             print(f"Error during sync: {e}")
-
-        time.sleep(5)
+            time.sleep(10)
