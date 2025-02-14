@@ -80,6 +80,7 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
         print("data fetched: ", len(rows))
 
         if not rows:
+            print("No new rows found. Exiting.")
             break
 
         yield [
@@ -117,7 +118,9 @@ def update_analytics_data():
     try:
         while True:
             data_chunk = [item for batch in fetch_data_chunk(last_id, CHUNK_SIZE) for item in batch]
+            print(f"Fetched {len(data_chunk)} data_chunk")
             if not data_chunk:
+                print("No new data found. Exiting.")
                 break
 
             for data in data_chunk:
