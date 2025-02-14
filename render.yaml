@@ -3,5 +3,7 @@ services:
     name: analytics-updater
     env: docker
     dockerCommand: "python update_elasticsearch.py"
+    startCommand: "python update_elasticsearch.py"
+      autoDeploy: true
     envVars:
       - fromFile: .env
