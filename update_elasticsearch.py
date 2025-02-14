@@ -77,6 +77,8 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
 
     while True:
         rows = cursor.fetchmany(size=CHUNK_SIZE)
+        print("data fetched: ", len(rows))
+
         if not rows:
             break
 
@@ -104,9 +106,11 @@ def fetch_data_chunk(last_id=0, limit=CHUNK_SIZE):
 
 def update_analytics_data():
     """Insert fetched data into analytics_data with deduplication."""
+    print("Starting data sync to analytics_data...")
     conn = get_connection()
     cursor = conn.cursor()
     last_id = get_last_synced_id()
+    print("Connection built, last_id is:", last_id)
 
     records_synced = 0
 
@@ -176,18 +180,4 @@ def update_analytics_data():
 
 
 if __name__ == "__main__":
-    print("Starting data sync to analytics_data...")
-
-    while True:
-        try:
-            records_synced = update_analytics_data()
-
-            if records_synced == 0:
-                print("No more records to sync. Retrying in 30 seconds...")
-                time.sleep(30)
-            else:
-                print(f"Processed {records_synced} records. Checking for more...")
-
-        except Exception as e:
-            print(f"Error during sync: {e}")
-            time.sleep(10)
+    update_analytics_data()
